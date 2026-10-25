@@ -1,0 +1,66 @@
+.editor-pane {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+  margin: 0 5px 6px 0;
+  border-radius: 12px;
+  background: var(--editor);
+  user-select: text;
+}
+
+.editor-pane textarea {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  resize: none;
+  padding: 15px 16px 30px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #e7e7e7;
+  caret-color: var(--accent);
+  font-family: "Segoe UI Variable Text", "Segoe UI", sans-serif;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.save-indicator {
+  position: absolute;
+  bottom: 8px;
+  left: 17px;
+  z-index: 1;
+  color: #777777;
+  font-size: 10px;
+  pointer-events: none;
+}
+
+.save-indicator--error {
+  color: var(--danger);
+}
+
+.editor-pane--empty {
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 12px;
+  color: #777777;
+  font-size: 13px;
+}
+
+.new-note-button {
+  height: 32px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 6px;
+  background: #303030;
+  color: #dcdcdc;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.new-note-button:hover {
+  background: #383838;
+}

@@ -1,7 +1,7 @@
 {
   "name": "instant-notes",
   "private": true,
-  "version": "0.1.2",
+  "version": "0.3.0",
   "description": "Application desktop locale de capture instantanée de notes.",
   "author": "Hugo Picot",
   "type": "module",
@@ -9,12 +9,14 @@
     "dev": "tauri dev",
     "dev:renderer": "vite",
     "build": "tsc && vite build",
+    "test": "vitest run",
     "start": "tauri dev",
     "dist:win": "tauri build",
     "tauri": "tauri",
     "preview": "vite preview"
   },
   "dependencies": {
+    "@fluentui/react-icons": "^2.0.344",
     "@tauri-apps/api": "^2.12.4",
     "@tauri-apps/plugin-sql": "^2.6.0",
     "react": "^19.1.0",
@@ -26,6 +28,7 @@
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^6.0.2",
     "typescript": "~6.0.3",
-    "vite": "^8.0.16"
+    "vite": "^8.0.16",
+    "vitest": "^5.0.5"
   }
 }

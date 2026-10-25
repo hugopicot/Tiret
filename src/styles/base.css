@@ -1,0 +1,59 @@
+:root {
+  font-family: "Segoe UI Variable Text", "Segoe UI", sans-serif;
+  color: #d8d8d8;
+  background: #202020;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  --shell: #202020;
+  --editor: #191919;
+  --surface-hover: #292929;
+  --surface-active: #303030;
+  --line: #343434;
+  --text: #d8d8d8;
+  --muted: #999999;
+  --faint: #747474;
+  --accent: #e6d34f;
+  --danger: #e88a8a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+button {
+  color: inherit;
+}
+
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible {
+  outline: 1px solid #696969;
+  outline-offset: -1px;
+}
+
+svg {
+  display: block;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+  }
+}

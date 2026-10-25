@@ -1,185 +1,198 @@
+import {
+  ArrowMaximize20Regular,
+  DataHistogram20Regular,
+  Dismiss20Regular,
+} from "@fluentui/react-icons";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { loadPrimaryNote, savePrimaryNote } from "./lib/database";
+import { useCallback, useEffect, useRef, type MouseEvent } from "react";
+import { EditorPane } from "./components/EditorPane";
+import { HistorySidebar } from "./components/HistorySidebar";
+import { NavigationRail } from "./components/NavigationRail";
+import { TabBar } from "./components/TabBar";
+import { useNotesWorkspace } from "./hooks/useNotesWorkspace";
+import { runAfterSuccessfulSave } from "./lib/safeLifecycle";
 import "./App.css";
 
-type SaveState = "loading" | "saved" | "saving" | "error";
+interface WindowRequest {
+  requestedAtMs: number;
+}
 
 const appWindow = getCurrentWindow();
 
-function formatTime(value: string | null): string {
-  if (!value) return "jamais";
-
-  return new Intl.DateTimeFormat("fr-FR", {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  }).format(new Date(value));
-}
-
 function App() {
   const editorRef = useRef<HTMLTextAreaElement>(null);
-  const hasLoadedRef = useRef(false);
-  const saveSequenceRef = useRef(0);
-  const [content, setContent] = useState("");
-  const [shortcut, setShortcut] = useState("Ctrl + Shift + Espace");
-  const [saveState, setSaveState] = useState<SaveState>("loading");
-  const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
+  const scrollPositionsRef = useRef(new Map<number, number>());
+  const {
+    activeNote,
+    closeNote,
+    createNote,
+    deleteNote,
+    flush,
+    history,
+    openNote,
+    openNotes,
+    saveState,
+    sidebarOpen,
+    toggleSidebar,
+    updateContent,
+    updateTitle,
+  } = useNotesWorkspace();
 
-  const focusEditor = useCallback(() => {
-    requestAnimationFrame(() => editorRef.current?.focus());
-  }, []);
+  const focusEditor = useCallback((requestedAtMs?: number) => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        editorRef.current?.focus();
 
-  useEffect(() => {
-    let disposed = false;
-
-    Promise.all([loadPrimaryNote(), invoke<string>("capture_shortcut")])
-      .then(([note, registeredShortcut]) => {
-        if (disposed) return;
-
-        setContent(note?.content ?? "");
-        setLastSavedAt(note?.updated_at ?? null);
-        setShortcut(registeredShortcut.split("+").join(" + "));
-        setSaveState("saved");
-        hasLoadedRef.current = true;
-        focusEditor();
-      })
-      .catch((error: unknown) => {
-        console.error("Impossible d'initialiser l'application", error);
-        if (!disposed) setSaveState("error");
+        if (requestedAtMs !== undefined) {
+          console.info(`Capture prête en ${Date.now() - requestedAtMs} ms`);
+        }
       });
-
-    return () => {
-      disposed = true;
-    };
-  }, [focusEditor]);
-
-  useEffect(() => {
-    const unlistenPromise = listen("capture-requested", focusEditor);
-
-    return () => {
-      void unlistenPromise.then((unlisten) => unlisten());
-    };
-  }, [focusEditor]);
-
-  useEffect(() => {
-    const unlistenPromise = appWindow.onCloseRequested(async (event) => {
-      event.preventDefault();
-      await appWindow.hide();
     });
-
-    return () => {
-      void unlistenPromise.then((unlisten) => unlisten());
-    };
   }, []);
 
-  useEffect(() => {
-    if (!hasLoadedRef.current) return;
-
-    const sequence = ++saveSequenceRef.current;
-    setSaveState("saving");
-
-    const timeoutId = window.setTimeout(() => {
-      savePrimaryNote(content)
-        .then((updatedAt) => {
-          if (sequence !== saveSequenceRef.current) return;
-          setLastSavedAt(updatedAt);
-          setSaveState("saved");
-        })
-        .catch((error: unknown) => {
-          console.error("Impossible d'enregistrer la note", error);
-          if (sequence === saveSequenceRef.current) setSaveState("error");
-        });
-    }, 350);
-
-    return () => window.clearTimeout(timeoutId);
-  }, [content]);
+  const keepWindowOpenOnSaveError = useCallback(() => {
+    void appWindow.show();
+    void appWindow.setFocus();
+    focusEditor();
+  }, [focusEditor]);
 
   const hideWindow = useCallback(async () => {
-    await appWindow.hide();
-  }, []);
+    const hidden = await runAfterSuccessfulSave(flush, () => appWindow.hide());
+    if (!hidden) keepWindowOpenOnSaveError();
+  }, [flush, keepWindowOpenOnSaveError]);
 
   const quitApplication = useCallback(async () => {
-    await invoke("quit_app");
-  }, []);
+    const quit = await runAfterSuccessfulSave(flush, () => invoke("quit_app"));
+    if (!quit) keepWindowOpenOnSaveError();
+  }, [flush, keepWindowOpenOnSaveError]);
 
-  const statusLabel = {
-    loading: "Ouverture de la base locale…",
-    saving: "Enregistrement…",
-    saved: `Enregistré à ${formatTime(lastSavedAt)}`,
-    error: "Échec de l'enregistrement",
-  }[saveState];
+  const createAndFocus = useCallback(
+    (requestedAtMs?: number) => {
+      createNote();
+      focusEditor(requestedAtMs);
+    },
+    [createNote, focusEditor],
+  );
+
+  const openAndFocus = useCallback(
+    (noteId: number) => {
+      openNote(noteId);
+      focusEditor();
+    },
+    [focusEditor, openNote],
+  );
+
+  const startWindowDrag = (event: MouseEvent<HTMLElement>) => {
+    if (event.button !== 0) return;
+
+    const target = event.target as HTMLElement;
+    if (target.closest("button, input")) return;
+
+    void appWindow.startDragging();
+  };
+
+  useEffect(() => {
+    const unlistenPromises = [
+      listen<WindowRequest>("new-note-requested", (event) => {
+        createAndFocus(event.payload.requestedAtMs);
+      }),
+      listen<WindowRequest>("focus-requested", (event) => {
+        focusEditor(event.payload.requestedAtMs);
+      }),
+      listen("hide-requested", () => {
+        void hideWindow();
+      }),
+      listen("quit-requested", () => {
+        void quitApplication();
+      }),
+    ];
+
+    return () => {
+      void Promise.all(unlistenPromises).then((unlistenFunctions) => {
+        unlistenFunctions.forEach((unlisten) => unlisten());
+      });
+    };
+  }, [createAndFocus, focusEditor, hideWindow, quitApplication]);
+
+  useEffect(() => {
+    if (!activeNote) return;
+
+    requestAnimationFrame(() => {
+      if (!editorRef.current) return;
+      editorRef.current.scrollTop = scrollPositionsRef.current.get(activeNote.id) ?? 0;
+      editorRef.current.focus();
+    });
+  }, [activeNote?.id]);
 
   return (
-    <main className="app-shell">
-      <div className="grain" aria-hidden="true" />
-
-      <header className="topbar">
-        <div className="brand-lockup">
-          <span className="brand-mark" aria-hidden="true">N</span>
-          <div>
-            <p className="eyebrow">Capture locale</p>
-            <h1>Note sans titre</h1>
-          </div>
+    <main className={`app-shell ${sidebarOpen ? "app-shell--expanded" : ""}`}>
+      <header
+        className="topbar"
+        data-tauri-drag-region
+        onMouseDown={startWindowDrag}
+      >
+        <div className="brand-icon" data-tauri-drag-region aria-label="Tiret">
+          <DataHistogram20Regular />
         </div>
 
-        <div className="window-actions">
-          <button className="text-button" type="button" onClick={hideWindow}>
-            Masquer
-          </button>
+        <TabBar
+          notes={openNotes}
+          activeNoteId={activeNote?.id ?? null}
+          onCreate={() => createAndFocus()}
+          onClose={closeNote}
+          onRename={updateTitle}
+          onSelect={openAndFocus}
+        />
+
+        <div className="window-controls">
           <button
-            className="text-button text-button--quit"
             type="button"
-            onClick={quitApplication}
-            title="Arrêter complètement l'application"
+            onClick={() => void appWindow.toggleMaximize()}
+            aria-label="Agrandir ou restaurer"
           >
-            Quitter
+            <ArrowMaximize20Regular />
           </button>
           <button
-            className="icon-button"
             type="button"
-            onClick={hideWindow}
+            onClick={() => void hideWindow()}
             aria-label="Masquer l'application"
-            title="Masquer — le raccourci reste actif"
           >
-            ×
+            <Dismiss20Regular />
           </button>
         </div>
       </header>
 
-      <section className="editor-card" aria-label="Éditeur de note">
-        <div className="paper-index" aria-hidden="true">01</div>
-        <textarea
-          ref={editorRef}
-          value={content}
-          onChange={(event) => setContent(event.target.value)}
+      <div className="app-body">
+        {sidebarOpen ? (
+          <HistorySidebar
+            activeNoteId={activeNote?.id ?? null}
+            notes={history}
+            onCreate={() => createAndFocus()}
+            onDelete={deleteNote}
+            onOpen={openAndFocus}
+            onToggle={toggleSidebar}
+          />
+        ) : (
+          <NavigationRail onCreate={() => createAndFocus()} onExpand={toggleSidebar} />
+        )}
+
+        <EditorPane
+          editorRef={editorRef}
+          note={activeNote}
+          saveState={saveState}
+          onContentChange={updateContent}
+          onCreate={() => createAndFocus()}
           onKeyDown={(event) => {
             if (event.key === "Escape") void hideWindow();
           }}
-          placeholder="Écris avant que l’idée disparaisse…"
-          aria-label="Contenu de la note"
-          spellCheck="true"
+          onScroll={(event) => {
+            if (!activeNote) return;
+            scrollPositionsRef.current.set(activeNote.id, event.currentTarget.scrollTop);
+          }}
         />
-
-        <footer className="editor-footer">
-          <div
-            className={`save-status save-status--${saveState}`}
-            role="status"
-            aria-live="polite"
-          >
-            <span className="status-dot" aria-hidden="true" />
-            {statusLabel}
-          </div>
-          <span>{content.length.toLocaleString("fr-FR")} caractères</span>
-        </footer>
-      </section>
-
-      <aside className="shortcut-hint">
-        <span>Disponible depuis n’importe quelle application</span>
-        <kbd>{shortcut}</kbd>
-      </aside>
+      </div>
     </main>
   );
 }
