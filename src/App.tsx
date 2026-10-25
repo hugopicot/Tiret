@@ -6,13 +6,15 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { useCallback, useEffect, useRef, type MouseEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
 import { EditorPane } from "./components/EditorPane";
 import { HistorySidebar } from "./components/HistorySidebar";
 import { NavigationRail } from "./components/NavigationRail";
 import { TabBar } from "./components/TabBar";
 import { useNotesWorkspace } from "./hooks/useNotesWorkspace";
+import { getNoteLabel } from "./lib/noteLabel";
 import { runAfterSuccessfulSave } from "./lib/safeLifecycle";
+import type { Note } from "./types";
 import "./App.css";
 
 interface WindowRequest {
@@ -24,6 +26,8 @@ const appWindow = getCurrentWindow();
 function App() {
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const scrollPositionsRef = useRef(new Map<number, number>());
+  const [undoNote, setUndoNote] = useState<Note | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const {
     activeNote,
     closeNote,
@@ -33,9 +37,12 @@ function App() {
     history,
     openNote,
     openNotes,
+    permanentlyDeleteNote,
+    restoreNote,
     saveState,
     sidebarOpen,
     toggleSidebar,
+    trash,
     updateContent,
     updateTitle,
   } = useNotesWorkspace();
@@ -76,6 +83,14 @@ function App() {
     [createNote, focusEditor],
   );
 
+  const drainCaptureRequests = useCallback(async () => {
+    const requests = await invoke<number[]>("take_capture_requests");
+    if (requests.length === 0) return;
+
+    requests.forEach(() => createNote());
+    focusEditor(requests[requests.length - 1]);
+  }, [createNote, focusEditor]);
+
   const openAndFocus = useCallback(
     (noteId: number) => {
       openNote(noteId);
@@ -83,6 +98,44 @@ function App() {
     },
     [focusEditor, openNote],
   );
+
+  const trashNote = useCallback(
+    (noteId: number) => {
+      const note = deleteNote(noteId);
+      if (note) setUndoNote(note);
+    },
+    [deleteNote],
+  );
+
+  const restoreAndFocus = useCallback(
+    (noteId: number) => {
+      restoreNote(noteId);
+      setUndoNote((current) => (current?.id === noteId ? null : current));
+      focusEditor();
+    },
+    [focusEditor, restoreNote],
+  );
+
+  const exportNote = useCallback(async (note: Note, format: "txt" | "md") => {
+    const title = getNoteLabel(note);
+    const explicitTitle = note.title.trim();
+    const content = explicitTitle
+      ? format === "md"
+        ? `# ${explicitTitle}\n\n${note.content}`
+        : `${explicitTitle}\n\n${note.content}`
+      : note.content;
+
+    try {
+      const path = await invoke<string>("export_note", {
+        title,
+        content,
+        format,
+      });
+      setNotice(`Note exportée dans ${path}`);
+    } catch {
+      setNotice("L'export de la note a échoué");
+    }
+  }, []);
 
   const startWindowDrag = (event: MouseEvent<HTMLElement>) => {
     if (event.button !== 0) return;
@@ -94,9 +147,10 @@ function App() {
   };
 
   useEffect(() => {
+    let disposed = false;
     const unlistenPromises = [
-      listen<WindowRequest>("new-note-requested", (event) => {
-        createAndFocus(event.payload.requestedAtMs);
+      listen("capture-requests-changed", () => {
+        void drainCaptureRequests();
       }),
       listen<WindowRequest>("focus-requested", (event) => {
         focusEditor(event.payload.requestedAtMs);
@@ -109,12 +163,37 @@ function App() {
       }),
     ];
 
+    void Promise.all(unlistenPromises).then(() => {
+      if (!disposed) void drainCaptureRequests();
+    });
+
     return () => {
+      disposed = true;
       void Promise.all(unlistenPromises).then((unlistenFunctions) => {
         unlistenFunctions.forEach((unlisten) => unlisten());
       });
     };
-  }, [createAndFocus, focusEditor, hideWindow, quitApplication]);
+  }, [drainCaptureRequests, focusEditor, hideWindow, quitApplication]);
+
+  useEffect(() => {
+    void invoke<boolean>("take_recovery_notice").then((recovered) => {
+      if (recovered) {
+        setNotice("Tiret a restauré la dernière version cohérente après une fermeture inattendue");
+      }
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!undoNote) return;
+    const timer = window.setTimeout(() => setUndoNote(null), 8000);
+    return () => window.clearTimeout(timer);
+  }, [undoNote]);
+
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(null), 6000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
 
   useEffect(() => {
     if (!activeNote) return;
@@ -169,9 +248,13 @@ function App() {
           <HistorySidebar
             activeNoteId={activeNote?.id ?? null}
             notes={history}
+            trashedNotes={trash}
             onCreate={() => createAndFocus()}
-            onDelete={deleteNote}
+            onDelete={trashNote}
+            onExport={(note, format) => void exportNote(note, format)}
             onOpen={openAndFocus}
+            onPermanentDelete={permanentlyDeleteNote}
+            onRestore={restoreAndFocus}
             onToggle={toggleSidebar}
           />
         ) : (
@@ -192,6 +275,18 @@ function App() {
             scrollPositionsRef.current.set(activeNote.id, event.currentTarget.scrollTop);
           }}
         />
+      </div>
+
+      <div className="toast-stack" aria-live="polite">
+        {undoNote && (
+          <div className="app-toast">
+            <span>Note placée dans la corbeille</span>
+            <button type="button" onClick={() => restoreAndFocus(undoNote.id)}>
+              Annuler
+            </button>
+          </div>
+        )}
+        {notice && <div className="app-toast">{notice}</div>}
       </div>
     </main>
   );

@@ -1,6 +1,12 @@
+mod storage;
+
 use serde::Serialize;
+use std::sync::{
+    Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 use tauri::{
-    Emitter, Manager,
+    Emitter, Manager, State,
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
 };
@@ -20,6 +26,12 @@ struct WindowRequest {
     requested_at_ms: u64,
 }
 
+#[derive(Default)]
+struct CaptureRequests(Mutex<Vec<u64>>);
+
+#[derive(Default)]
+struct RecoveryNotice(AtomicBool);
+
 #[tauri::command]
 fn capture_shortcut() -> &'static str {
     CAPTURE_SHORTCUT
@@ -27,7 +39,37 @@ fn capture_shortcut() -> &'static str {
 
 #[tauri::command]
 fn quit_app(app: tauri::AppHandle) {
+    let _ = storage::mark_clean_shutdown(&app);
     app.exit(0);
+}
+
+#[tauri::command]
+fn take_capture_requests(requests: State<'_, CaptureRequests>) -> Vec<u64> {
+    let mut pending = requests
+        .0
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    std::mem::take(&mut *pending)
+}
+
+#[tauri::command]
+fn take_recovery_notice(notice: State<'_, RecoveryNotice>) -> bool {
+    notice.0.swap(false, Ordering::SeqCst)
+}
+
+#[tauri::command]
+fn create_rotating_backup(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    storage::create_rotating_backup(&app)
+}
+
+#[tauri::command]
+fn export_note(
+    app: tauri::AppHandle,
+    title: String,
+    content: String,
+    format: String,
+) -> Result<String, String> {
+    storage::export_note(&app, &title, &content, &format)
 }
 
 fn timestamp_ms() -> u64 {
@@ -52,9 +94,28 @@ fn show_capture_window(app: &tauri::AppHandle, event: &str) {
     }
 }
 
+#[cfg(desktop)]
+fn request_capture(app: &tauri::AppHandle) {
+    let requested_at_ms = timestamp_ms();
+    app.state::<CaptureRequests>()
+        .0
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .push(requested_at_ms);
+
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+        let _ = window.emit("capture-requests-changed", ());
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let builder = tauri::Builder::default();
+    let builder = tauri::Builder::default()
+        .manage(CaptureRequests::default())
+        .manage(RecoveryNotice::default());
 
     #[cfg(desktop)]
     let builder = builder
@@ -75,7 +136,7 @@ pub fn run() {
                         return;
                     }
 
-                    show_capture_window(app, "new-note-requested");
+                    request_capture(app);
                 })
                 .build(),
         )
@@ -83,6 +144,11 @@ pub fn run() {
         .setup(|app| {
             #[cfg(desktop)]
             {
+                let recovered = storage::prepare_session(app.handle())?;
+                app.state::<RecoveryNotice>()
+                    .0
+                    .store(recovered, Ordering::SeqCst);
+
                 app.global_shortcut().register(CAPTURE_SHORTCUT)?;
 
                 let open_item = MenuItem::with_id(app, "open", "Ouvrir Tiret", true, None::<&str>)?;
@@ -100,6 +166,7 @@ pub fn run() {
                             if let Some(window) = app.get_webview_window("main") {
                                 let _ = window.emit("quit-requested", ());
                             } else {
+                                let _ = storage::mark_clean_shutdown(app);
                                 app.exit(0);
                             }
                         }
@@ -124,10 +191,10 @@ pub fn run() {
 
                 app.autolaunch().enable()?;
 
-                if std::env::args().any(|argument| argument == "--hidden") {
-                    if let Some(window) = app.get_webview_window("main") {
-                        window.hide()?;
-                    }
+                if std::env::args().any(|argument| argument == "--hidden")
+                    && let Some(window) = app.get_webview_window("main")
+                {
+                    window.hide()?;
                 }
             }
 
@@ -139,7 +206,14 @@ pub fn run() {
                 let _ = window.emit("hide-requested", ());
             }
         })
-        .invoke_handler(tauri::generate_handler![capture_shortcut, quit_app])
+        .invoke_handler(tauri::generate_handler![
+            capture_shortcut,
+            create_rotating_backup,
+            export_note,
+            quit_app,
+            take_capture_requests,
+            take_recovery_notice
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

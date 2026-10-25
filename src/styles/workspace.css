@@ -284,7 +284,7 @@
   width: 100%;
   min-width: 0;
   gap: 2px;
-  padding: 7px 34px 7px 9px;
+  padding: 7px 58px 7px 9px;
   border: 0;
   border-radius: 5px;
   background: transparent;
@@ -349,11 +349,11 @@
   color: #ef8b82;
 }
 
-.history-item:has(.history-delete-confirm) {
+.history-item:has(.history-action-popover) {
   z-index: 2;
 }
 
-.history-delete-confirm {
+.history-action-popover {
   position: absolute;
   z-index: 3;
   top: calc(100% - 2px);
@@ -370,13 +370,13 @@
   font-size: 11px;
 }
 
-.history-delete-confirm > div {
+.history-action-popover > div {
   display: flex;
   justify-content: flex-end;
   gap: 6px;
 }
 
-.history-delete-confirm button {
+.history-action-popover button {
   height: 26px;
   padding: 0 8px;
   border: 0;
@@ -387,17 +387,60 @@
   font-size: 10px;
 }
 
-.history-delete-confirm button:hover {
+.history-action-popover button:hover {
   background: #474747;
 }
 
-.history-delete-confirm .history-delete-confirm__delete {
+.history-action-popover .history-action-popover__danger {
   background: #8f3028;
   color: #ffffff;
 }
 
-.history-delete-confirm .history-delete-confirm__delete:hover {
+.history-action-popover .history-action-popover__danger:hover {
   background: #a43a31;
+}
+
+.toast-stack {
+  position: fixed;
+  z-index: 20;
+  right: 12px;
+  bottom: 12px;
+  display: grid;
+  max-width: min(360px, calc(100vw - 24px));
+  gap: 8px;
+  pointer-events: none;
+}
+
+.app-toast {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 9px 11px;
+  border: 1px solid #484848;
+  border-radius: 7px;
+  background: #303030;
+  color: #eeeeee;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.36);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+  pointer-events: auto;
+}
+
+.app-toast button {
+  flex: 0 0 auto;
+  padding: 4px 7px;
+  border: 0;
+  border-radius: 4px;
+  background: #454545;
+  color: #ffffff;
+  cursor: pointer;
+  font: inherit;
+}
+
+.app-toast button:hover {
+  background: #555555;
 }
 
 @media (max-width: 459px) {

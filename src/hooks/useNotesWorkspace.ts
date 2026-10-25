@@ -1,65 +1,26 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  createRotatingBackup,
   flushPendingWrites,
+  loadHistory,
+  loadTrash,
   loadWorkspace,
   saveWorkspaceSnapshot,
 } from "../lib/database";
 import { isNoteInHistory } from "../lib/noteLabel";
-import type { Note, WorkspaceState } from "../types";
+import { mergeNoteIds, mergeNotes } from "../lib/workspaceStartup";
+import {
+  createBlankNote,
+  emptyWorkspace,
+  moveNoteToTrash,
+  removeNote,
+  restoreTrashedNote,
+  toPersistedWorkspace,
+  type NotesWorkspace,
+} from "../lib/workspaceState";
+import type { Note } from "../types";
 
 export type SaveState = "loading" | "saved" | "saving" | "error";
-
-interface NotesWorkspace {
-  notes: Note[];
-  openNoteIds: number[];
-  activeNoteId: number | null;
-  sidebarOpen: boolean;
-}
-
-const emptyWorkspace: NotesWorkspace = {
-  notes: [],
-  openNoteIds: [],
-  activeNoteId: null,
-  sidebarOpen: true,
-};
-
-let noteSequence = 0;
-
-function createBlankNote(existingIds: Set<number>): Note {
-  let id = Date.now() * 1000 + (noteSequence++ % 1000);
-  while (existingIds.has(id)) id += 1;
-
-  const now = new Date().toISOString();
-  return {
-    id,
-    title: "",
-    content: "",
-    createdAt: now,
-    updatedAt: now,
-  };
-}
-
-function toPersistedWorkspace(workspace: NotesWorkspace): WorkspaceState {
-  return {
-    openNoteIds: workspace.openNoteIds,
-    activeNoteId: workspace.activeNoteId,
-    sidebarOpen: workspace.sidebarOpen,
-  };
-}
-
-function withoutNote(workspace: NotesWorkspace, noteId: number): NotesWorkspace | null {
-  const noteIndex = workspace.openNoteIds.indexOf(noteId);
-  const notes = workspace.notes.filter((note) => note.id !== noteId);
-  if (notes.length === workspace.notes.length) return null;
-
-  const openNoteIds = workspace.openNoteIds.filter((id) => id !== noteId);
-  const activeNoteId =
-    workspace.activeNoteId === noteId
-      ? (openNoteIds[noteIndex] ?? openNoteIds[noteIndex - 1] ?? null)
-      : workspace.activeNoteId;
-
-  return { ...workspace, notes, openNoteIds, activeNoteId };
-}
 
 export function useNotesWorkspace() {
   const [workspace, setWorkspace] = useState(emptyWorkspace);
@@ -67,9 +28,12 @@ export function useNotesWorkspace() {
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
   const workspaceRef = useRef(workspace);
   const dirtyNoteIdsRef = useRef(new Set<number>());
+  const locallyMutatedNoteIdsRef = useRef(new Set<number>());
   const deletedNoteIdsRef = useRef(new Set<number>());
   const saveTimerRef = useRef<number | null>(null);
   const initializationRef = useRef<Promise<void> | null>(null);
+  const initializedRef = useRef(false);
+  const touchedBeforeInitializationRef = useRef(false);
   const saveRequestRef = useRef(0);
 
   const commitWorkspace = useCallback((next: NotesWorkspace) => {
@@ -79,7 +43,7 @@ export function useNotesWorkspace() {
 
   const persistSnapshot = useCallback(async (snapshot: NotesWorkspace) => {
     const request = ++saveRequestRef.current;
-    const dirtyNotes = snapshot.notes.filter((note) =>
+    const dirtyNotes = [...snapshot.notes, ...snapshot.trash].filter((note) =>
       dirtyNoteIdsRef.current.has(note.id),
     );
     const savedVersions = new Map(
@@ -97,7 +61,10 @@ export function useNotesWorkspace() {
       );
 
       for (const [noteId, savedVersion] of savedVersions) {
-        const current = workspaceRef.current.notes.find((note) => note.id === noteId);
+        const current = [
+          ...workspaceRef.current.notes,
+          ...workspaceRef.current.trash,
+        ].find((note) => note.id === noteId);
         if (current?.updatedAt === savedVersion) {
           dirtyNoteIdsRef.current.delete(noteId);
         }
@@ -109,6 +76,8 @@ export function useNotesWorkspace() {
         setLastSavedAt(new Date().toISOString());
         setSaveState(dirtyNoteIdsRef.current.size === 0 ? "saved" : "saving");
       }
+
+      void createRotatingBackup().catch(() => undefined);
     } catch (error) {
       console.error("Impossible d'enregistrer les notes", error);
       setSaveState("error");
@@ -136,24 +105,40 @@ export function useNotesWorkspace() {
 
     initializationRef.current = loadWorkspace()
       .then(async (loaded) => {
-        let notes = loaded.notes;
+        const local = workspaceRef.current;
+        const hadLocalActivity = touchedBeforeInitializationRef.current;
+        let notes = mergeNotes(local.notes, loaded.notes);
+        let openNoteIds = hadLocalActivity
+          ? mergeNoteIds(loaded.workspace.openNoteIds, local.openNoteIds)
+          : loaded.workspace.openNoteIds;
+        let activeNoteId = hadLocalActivity
+          ? local.activeNoteId
+          : loaded.workspace.activeNoteId;
         let next: NotesWorkspace = {
           notes,
-          ...loaded.workspace,
+          trash: [],
+          openNoteIds,
+          activeNoteId,
+          sidebarOpen: hadLocalActivity
+            ? local.sidebarOpen
+            : loaded.workspace.sidebarOpen,
         };
 
         if (notes.length === 0) {
-          const note = createBlankNote(new Set());
+          const note = createBlankNote([]);
           notes = [note];
           dirtyNoteIdsRef.current.add(note.id);
+          locallyMutatedNoteIdsRef.current.add(note.id);
           next = {
             notes,
+            trash: [],
             openNoteIds: [note.id],
             activeNoteId: note.id,
             sidebarOpen: true,
           };
         }
 
+        initializedRef.current = true;
         commitWorkspace(next);
         setLastSavedAt(notes[0]?.updatedAt ?? null);
 
@@ -162,6 +147,27 @@ export function useNotesWorkspace() {
         } else {
           setSaveState("saved");
         }
+
+        void createRotatingBackup(true).catch(() => undefined);
+
+        void Promise.all([loadHistory(), loadTrash()])
+          .then(([history, trash]) => {
+            const current = workspaceRef.current;
+            const locallyChangedIds = locallyMutatedNoteIdsRef.current;
+            const safeHistory = history.filter(
+              (note) => !locallyChangedIds.has(note.id),
+            );
+            const safeTrash = trash.filter(
+              (note) => !locallyChangedIds.has(note.id),
+            );
+            commitWorkspace({
+              ...current,
+              notes: mergeNotes(current.notes, safeHistory),
+              trash: mergeNotes(current.trash, safeTrash),
+            });
+            locallyMutatedNoteIdsRef.current.clear();
+          })
+          .catch(() => undefined);
       })
       .catch((error: unknown) => {
         console.error("Impossible d'initialiser l'espace de travail", error);
@@ -180,7 +186,7 @@ export function useNotesWorkspace() {
 
   const createNote = useCallback((): Note => {
     const current = workspaceRef.current;
-    const note = createBlankNote(new Set(current.notes.map((item) => item.id)));
+    const note = createBlankNote([...current.notes, ...current.trash]);
     const next = {
       ...current,
       notes: [note, ...current.notes],
@@ -188,9 +194,13 @@ export function useNotesWorkspace() {
       activeNoteId: note.id,
     };
 
+    if (!initializedRef.current) touchedBeforeInitializationRef.current = true;
     dirtyNoteIdsRef.current.add(note.id);
+    locallyMutatedNoteIdsRef.current.add(note.id);
     commitWorkspace(next);
-    void persistSnapshot(next).catch(() => undefined);
+    if (initializedRef.current) {
+      void persistSnapshot(next).catch(() => undefined);
+    }
     return note;
   }, [commitWorkspace, persistSnapshot]);
 
@@ -208,7 +218,11 @@ export function useNotesWorkspace() {
       };
 
       commitWorkspace(next);
-      void persistSnapshot(next).catch(() => undefined);
+      if (initializedRef.current) {
+        void persistSnapshot(next).catch(() => undefined);
+      } else {
+        touchedBeforeInitializationRef.current = true;
+      }
     },
     [commitWorkspace, persistSnapshot],
   );
@@ -220,13 +234,18 @@ export function useNotesWorkspace() {
       if (!note) return;
 
       if (!isNoteInHistory(note)) {
-        const next = withoutNote(current, noteId);
+        const next = removeNote(current, noteId);
         if (!next) return;
 
         dirtyNoteIdsRef.current.delete(noteId);
+        locallyMutatedNoteIdsRef.current.add(noteId);
         deletedNoteIdsRef.current.add(noteId);
         commitWorkspace(next);
-        void persistSnapshot(next).catch(() => undefined);
+        if (initializedRef.current) {
+          void persistSnapshot(next).catch(() => undefined);
+        } else {
+          touchedBeforeInitializationRef.current = true;
+        }
         return;
       }
 
@@ -241,18 +260,56 @@ export function useNotesWorkspace() {
       const next = { ...current, openNoteIds, activeNoteId };
 
       commitWorkspace(next);
-      void persistSnapshot(next).catch(() => undefined);
+      if (initializedRef.current) {
+        void persistSnapshot(next).catch(() => undefined);
+      } else {
+        touchedBeforeInitializationRef.current = true;
+      }
     },
     [commitWorkspace, persistSnapshot],
   );
 
   const deleteNote = useCallback(
+    (noteId: number): Note | null => {
+      const current = workspaceRef.current;
+      const result = moveNoteToTrash(current, noteId, new Date().toISOString());
+      if (!result) return null;
+
+      dirtyNoteIdsRef.current.add(noteId);
+      locallyMutatedNoteIdsRef.current.add(noteId);
+      commitWorkspace(result.workspace);
+      void persistSnapshot(result.workspace).catch(() => undefined);
+      return result.note;
+    },
+    [commitWorkspace, persistSnapshot],
+  );
+
+  const restoreNote = useCallback(
     (noteId: number) => {
       const current = workspaceRef.current;
-      const next = withoutNote(current, noteId);
+      const next = restoreTrashedNote(current, noteId, new Date().toISOString());
       if (!next) return;
 
+      dirtyNoteIdsRef.current.add(noteId);
+      locallyMutatedNoteIdsRef.current.add(noteId);
+      commitWorkspace(next);
+      void persistSnapshot(next).catch(() => undefined);
+    },
+    [commitWorkspace, persistSnapshot],
+  );
+
+  const permanentlyDeleteNote = useCallback(
+    (noteId: number) => {
+      const current = workspaceRef.current;
+      if (!current.trash.some((note) => note.id === noteId)) return;
+
+      const next = {
+        ...current,
+        trash: current.trash.filter((note) => note.id !== noteId),
+      };
+
       dirtyNoteIdsRef.current.delete(noteId);
+      locallyMutatedNoteIdsRef.current.add(noteId);
       deletedNoteIdsRef.current.add(noteId);
       commitWorkspace(next);
       void persistSnapshot(next).catch(() => undefined);
@@ -274,8 +331,13 @@ export function useNotesWorkspace() {
       const next = { ...current, notes };
 
       dirtyNoteIdsRef.current.add(current.activeNoteId);
+      locallyMutatedNoteIdsRef.current.add(current.activeNoteId);
       commitWorkspace(next);
-      scheduleSave();
+      if (initializedRef.current) {
+        scheduleSave();
+      } else {
+        touchedBeforeInitializationRef.current = true;
+      }
     },
     [commitWorkspace, scheduleSave],
   );
@@ -284,10 +346,16 @@ export function useNotesWorkspace() {
     const current = workspaceRef.current;
     const next = { ...current, sidebarOpen: !current.sidebarOpen };
     commitWorkspace(next);
-    void persistSnapshot(next).catch(() => undefined);
+    if (initializedRef.current) {
+      void persistSnapshot(next).catch(() => undefined);
+    } else {
+      touchedBeforeInitializationRef.current = true;
+    }
   }, [commitWorkspace, persistSnapshot]);
 
   const flush = useCallback(async () => {
+    await initializationRef.current;
+
     if (saveTimerRef.current !== null) {
       window.clearTimeout(saveTimerRef.current);
       saveTimerRef.current = null;
@@ -326,9 +394,12 @@ export function useNotesWorkspace() {
     lastSavedAt,
     openNote,
     openNotes,
+    permanentlyDeleteNote,
+    restoreNote,
     saveState,
     sidebarOpen: workspace.sidebarOpen,
     toggleSidebar,
+    trash: workspace.trash,
     updateContent: (content: string) => updateActiveNote({ content }),
     updateTitle: (title: string) => updateActiveNote({ title }),
   };

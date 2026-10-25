@@ -4,6 +4,7 @@ export interface Note {
   content: string;
   createdAt: string;
   updatedAt: string;
+  deletedAt: string | null;
 }
 
 export interface WorkspaceState {
