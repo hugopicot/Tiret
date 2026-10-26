@@ -28,6 +28,8 @@ export function createBlankNote(existingNotes: Note[]): Note {
     id,
     title: "",
     content: "",
+    contentJson: null,
+    documentVersion: 1,
     createdAt: now,
     updatedAt: now,
     deletedAt: null,

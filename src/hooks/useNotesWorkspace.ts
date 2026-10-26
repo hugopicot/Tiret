@@ -25,6 +25,7 @@ export type SaveState = "loading" | "saved" | "saving" | "error";
 export function useNotesWorkspace() {
   const [workspace, setWorkspace] = useState(emptyWorkspace);
   const [saveState, setSaveState] = useState<SaveState>("loading");
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
   const workspaceRef = useRef(workspace);
   const dirtyNoteIdsRef = useRef(new Set<number>());
@@ -73,6 +74,7 @@ export function useNotesWorkspace() {
       deletedNoteIds.forEach((noteId) => deletedNoteIdsRef.current.delete(noteId));
 
       if (request === saveRequestRef.current) {
+        setSaveError(null);
         setLastSavedAt(new Date().toISOString());
         setSaveState(dirtyNoteIdsRef.current.size === 0 ? "saved" : "saving");
       }
@@ -80,6 +82,7 @@ export function useNotesWorkspace() {
       void createRotatingBackup().catch(() => undefined);
     } catch (error) {
       console.error("Impossible d'enregistrer les notes", error);
+      setSaveError(error instanceof Error ? error.message : String(error));
       setSaveState("error");
       throw error;
     }
@@ -318,7 +321,11 @@ export function useNotesWorkspace() {
   );
 
   const updateActiveNote = useCallback(
-    (changes: Pick<Note, "title"> | Pick<Note, "content">) => {
+    (
+      changes:
+        | Pick<Note, "title">
+        | Pick<Note, "content" | "contentJson" | "documentVersion">,
+    ) => {
       const current = workspaceRef.current;
       if (current.activeNoteId === null) return;
 
@@ -397,10 +404,12 @@ export function useNotesWorkspace() {
     permanentlyDeleteNote,
     restoreNote,
     saveState,
+    saveError,
     sidebarOpen: workspace.sidebarOpen,
     toggleSidebar,
     trash: workspace.trash,
-    updateContent: (content: string) => updateActiveNote({ content }),
+    updateContent: (content: string, contentJson: string) =>
+      updateActiveNote({ content, contentJson, documentVersion: 1 }),
     updateTitle: (title: string) => updateActiveNote({ title }),
   };
 }

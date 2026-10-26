@@ -7,11 +7,13 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
-import { EditorPane } from "./components/EditorPane";
+import { CommandPalette } from "./components/CommandPalette";
+import { EditorPane, type EditorPaneHandle } from "./components/EditorPane";
 import { HistorySidebar } from "./components/HistorySidebar";
 import { NavigationRail } from "./components/NavigationRail";
 import { TabBar } from "./components/TabBar";
 import { useNotesWorkspace } from "./hooks/useNotesWorkspace";
+import { editorDocumentToMarkdown, readEditorDocument } from "./lib/editorDocument";
 import { getNoteLabel } from "./lib/noteLabel";
 import { runAfterSuccessfulSave } from "./lib/safeLifecycle";
 import type { Note } from "./types";
@@ -24,10 +26,14 @@ interface WindowRequest {
 const appWindow = getCurrentWindow();
 
 function App() {
-  const editorRef = useRef<HTMLTextAreaElement>(null);
-  const scrollPositionsRef = useRef(new Map<number, number>());
+  const editorRef = useRef<EditorPaneHandle>(null);
+  const editorStatesRef = useRef(
+    new Map<number, { scrollTop: number; selection: { from: number; to: number } | null }>(),
+  );
   const [undoNote, setUndoNote] = useState<Note | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [alwaysOnTop, setAlwaysOnTop] = useState(false);
   const {
     activeNote,
     closeNote,
@@ -39,6 +45,7 @@ function App() {
     openNotes,
     permanentlyDeleteNote,
     restoreNote,
+    saveError,
     saveState,
     sidebarOpen,
     toggleSidebar,
@@ -83,6 +90,17 @@ function App() {
     [createNote, focusEditor],
   );
 
+  const toggleAlwaysOnTop = useCallback(() => {
+    const next = !alwaysOnTop;
+    void appWindow
+      .setAlwaysOnTop(next)
+      .then(() => {
+        setAlwaysOnTop(next);
+        setNotice(next ? "Tiret reste au premier plan" : "Premier plan désactivé");
+      })
+      .catch(() => setNotice("Impossible de modifier le premier plan"));
+  }, [alwaysOnTop]);
+
   const drainCaptureRequests = useCallback(async () => {
     const requests = await invoke<number[]>("take_capture_requests");
     if (requests.length === 0) return;
@@ -93,10 +111,16 @@ function App() {
 
   const openAndFocus = useCallback(
     (noteId: number) => {
+      if (activeNote) {
+        editorStatesRef.current.set(activeNote.id, {
+          scrollTop: editorRef.current?.getScrollTop() ?? 0,
+          selection: editorRef.current?.getSelection() ?? null,
+        });
+      }
       openNote(noteId);
       focusEditor();
     },
-    [focusEditor, openNote],
+    [activeNote, focusEditor, openNote],
   );
 
   const trashNote = useCallback(
@@ -119,11 +143,15 @@ function App() {
   const exportNote = useCallback(async (note: Note, format: "txt" | "md") => {
     const title = getNoteLabel(note);
     const explicitTitle = note.title.trim();
+    const body =
+      format === "md"
+        ? editorDocumentToMarkdown(readEditorDocument(note.contentJson, note.content))
+        : note.content;
     const content = explicitTitle
       ? format === "md"
-        ? `# ${explicitTitle}\n\n${note.content}`
-        : `${explicitTitle}\n\n${note.content}`
-      : note.content;
+        ? `# ${explicitTitle}\n\n${body}`
+        : `${explicitTitle}\n\n${body}`
+      : body;
 
     try {
       const path = await invoke<string>("export_note", {
@@ -200,10 +228,66 @@ function App() {
 
     requestAnimationFrame(() => {
       if (!editorRef.current) return;
-      editorRef.current.scrollTop = scrollPositionsRef.current.get(activeNote.id) ?? 0;
+      const savedState = editorStatesRef.current.get(activeNote.id);
+      editorRef.current.setScrollTop(savedState?.scrollTop ?? 0);
+      if (savedState?.selection) editorRef.current.setSelection(savedState.selection);
       editorRef.current.focus();
     });
   }, [activeNote?.id]);
+
+  useEffect(() => {
+    const handleAppShortcut = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey)) return;
+
+      if (event.key.toLocaleLowerCase() === "n") {
+        event.preventDefault();
+        createAndFocus();
+        return;
+      }
+
+      if (event.key.toLocaleLowerCase() === "w" && activeNote) {
+        event.preventDefault();
+        closeNote(activeNote.id);
+        return;
+      }
+
+      if (event.key.toLocaleLowerCase() === "k") {
+        event.preventDefault();
+        setCommandPaletteOpen(true);
+        return;
+      }
+
+      if (event.key.toLocaleLowerCase() === "f") {
+        event.preventDefault();
+        editorRef.current?.openFind();
+        return;
+      }
+
+      if (event.shiftKey && event.key.toLocaleLowerCase() === "p") {
+        event.preventDefault();
+        toggleAlwaysOnTop();
+        return;
+      }
+
+      if (event.key === "Tab" && openNotes.length > 1) {
+        event.preventDefault();
+        const currentIndex = openNotes.findIndex((note) => note.id === activeNote?.id);
+        const direction = event.shiftKey ? -1 : 1;
+        const nextIndex = (currentIndex + direction + openNotes.length) % openNotes.length;
+        openAndFocus(openNotes[nextIndex].id);
+      }
+    };
+
+    window.addEventListener("keydown", handleAppShortcut);
+    return () => window.removeEventListener("keydown", handleAppShortcut);
+  }, [
+    activeNote,
+    closeNote,
+    createAndFocus,
+    openAndFocus,
+    openNotes,
+    toggleAlwaysOnTop,
+  ]);
 
   return (
     <main className={`app-shell ${sidebarOpen ? "app-shell--expanded" : ""}`}>
@@ -262,20 +346,37 @@ function App() {
         )}
 
         <EditorPane
-          editorRef={editorRef}
+          ref={editorRef}
           note={activeNote}
+          saveError={saveError}
           saveState={saveState}
           onContentChange={updateContent}
           onCreate={() => createAndFocus()}
-          onKeyDown={(event) => {
-            if (event.key === "Escape") void hideWindow();
-          }}
-          onScroll={(event) => {
+          onEscape={() => void hideWindow()}
+          onScroll={(scrollTop) => {
             if (!activeNote) return;
-            scrollPositionsRef.current.set(activeNote.id, event.currentTarget.scrollTop);
+            const previous = editorStatesRef.current.get(activeNote.id);
+            editorStatesRef.current.set(activeNote.id, {
+              scrollTop,
+              selection: previous?.selection ?? null,
+            });
           }}
         />
       </div>
+
+      {commandPaletteOpen && (
+        <CommandPalette
+          alwaysOnTop={alwaysOnTop}
+          notes={history}
+          onClose={() => {
+            setCommandPaletteOpen(false);
+            focusEditor();
+          }}
+          onCreate={() => createAndFocus()}
+          onOpen={openAndFocus}
+          onToggleAlwaysOnTop={toggleAlwaysOnTop}
+        />
+      )}
 
       <div className="toast-stack" aria-live="polite">
         {undoNote && (

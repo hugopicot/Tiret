@@ -1,39 +1,31 @@
-import { describe, expect, it } from "vitest";
-import { runInTransaction, type SqlExecutor } from "./database";
+import { describe, expect, it, vi } from "vitest";
+import { retryDatabaseBusy } from "./database";
 
-class FakeDatabase implements SqlExecutor {
-  readonly queries: string[] = [];
+describe("SQLite busy retry", () => {
+  it("retries a transient database lock", async () => {
+    const operation = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(new Error("(code: 5) database is locked"))
+      .mockRejectedValueOnce(new Error("SQLITE_BUSY"))
+      .mockResolvedValue("saved");
 
-  async execute(query: string): Promise<void> {
-    this.queries.push(query);
-  }
-}
-
-describe("runInTransaction", () => {
-  it("commits a complete write", async () => {
-    const database = new FakeDatabase();
-
-    await runInTransaction(database, async () => {
-      await database.execute("WRITE NOTE");
-    });
-
-    expect(database.queries).toEqual(["BEGIN IMMEDIATE", "WRITE NOTE", "COMMIT"]);
+    await expect(retryDatabaseBusy(operation, [0, 0])).resolves.toBe("saved");
+    expect(operation).toHaveBeenCalledTimes(3);
   });
 
-  it("rolls back an interrupted write", async () => {
-    const database = new FakeDatabase();
+  it("does not hide a non-retryable write error", async () => {
+    const failure = new Error("disk full");
+    const operation = vi.fn<() => Promise<void>>().mockRejectedValue(failure);
 
-    await expect(
-      runInTransaction(database, async () => {
-        await database.execute("WRITE NOTE");
-        throw new Error("interrupted");
-      }),
-    ).rejects.toThrow("interrupted");
+    await expect(retryDatabaseBusy(operation, [0])).rejects.toBe(failure);
+    expect(operation).toHaveBeenCalledOnce();
+  });
 
-    expect(database.queries).toEqual([
-      "BEGIN IMMEDIATE",
-      "WRITE NOTE",
-      "ROLLBACK",
-    ]);
+  it("reports a persistent database lock", async () => {
+    const failure = new Error("database is locked");
+    const operation = vi.fn<() => Promise<void>>().mockRejectedValue(failure);
+
+    await expect(retryDatabaseBusy(operation, [0, 0])).rejects.toBe(failure);
+    expect(operation).toHaveBeenCalledTimes(3);
   });
 });

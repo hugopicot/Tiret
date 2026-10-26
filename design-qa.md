@@ -1,3 +1,37 @@
+# Design QA — éditeur par blocs
+
+## Cible
+
+Interface sombre et compacte inspirée des références fournies : commandes au curseur avec `/`, mise en forme uniquement sur sélection et aucune barre d'outils permanente.
+
+## Vérifications visuelles
+
+- fenêtre native 500 × 416 : passé ;
+- fenêtre redimensionnable à largeur compacte : passé ;
+- menu `/` ancré au curseur, filtrage `tit`, groupes et navigation clavier : passé ;
+- palette de sélection positionnée au-dessus du texte sans masquer la sélection : passé ;
+- palette `Ctrl + K` centrée, recherche et commandes visibles : passé ;
+- recherche locale `Ctrl + F` compacte et non bloquante : passé ;
+- titres, paragraphes, code, listes et tâches cohérents avec le thème existant : passé ;
+- absence de débordement horizontal de l'éditeur : passé après correction ;
+- libellé d'onglet dérivé de la première ligne : passé ;
+- restauration visuelle après arrêt brutal : passé.
+
+## Vérifications d'interaction
+
+- création et sélection d'un titre depuis `/` au clavier : passé ;
+- saisie puis sauvegarde du JSON structuré et du texte brut : passé ;
+- sélection au clavier et affichage de la palette : passé ;
+- plusieurs sauvegardes SQLite successives : passé après suppression du faux transactionnel multi-connexion ;
+- reprise d'une note structurée après processus tué : passé ;
+- accessibilité native des boutons, onglets, listes de commandes et champs de recherche : passé.
+
+## Résultat final
+
+final result: passed
+
+---
+
 # Design QA — historique Tiret
 
 ## Vérité visuelle

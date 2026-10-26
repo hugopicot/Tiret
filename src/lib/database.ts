@@ -7,6 +7,8 @@ interface NoteRow {
   id: number;
   title: string;
   content: string;
+  content_json: string | null;
+  document_version: number;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
@@ -22,10 +24,6 @@ interface TableColumn {
   name: string;
 }
 
-export interface SqlExecutor {
-  execute(query: string, bindValues?: unknown[]): Promise<unknown>;
-}
-
 export interface LoadedWorkspace {
   notes: Note[];
   workspace: WorkspaceState;
@@ -39,19 +37,19 @@ let lastBackupAt = 0;
 
 const backupIntervalMs = 5 * 60 * 1000;
 
-export async function runInTransaction<T>(
-  database: SqlExecutor,
+export async function retryDatabaseBusy<T>(
   operation: () => Promise<T>,
+  delays = [60, 180, 420, 900],
 ): Promise<T> {
-  await database.execute("BEGIN IMMEDIATE");
-
-  try {
-    const result = await operation();
-    await database.execute("COMMIT");
-    return result;
-  } catch (error) {
-    await database.execute("ROLLBACK").catch(() => undefined);
-    throw error;
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const busy = /database is locked|SQLITE_BUSY|\(code: 5\)/i.test(message);
+      if (!busy || attempt >= delays.length) throw error;
+      await new Promise((resolve) => globalThis.setTimeout(resolve, delays[attempt]));
+    }
   }
 }
 
@@ -71,6 +69,16 @@ async function addMissingNoteColumns(database: Database): Promise<void> {
     await database.execute("ALTER TABLE notes ADD COLUMN deleted_at TEXT");
   }
 
+  if (!names.has("content_json")) {
+    await database.execute("ALTER TABLE notes ADD COLUMN content_json TEXT");
+  }
+
+  if (!names.has("document_version")) {
+    await database.execute(
+      "ALTER TABLE notes ADD COLUMN document_version INTEGER NOT NULL DEFAULT 1",
+    );
+  }
+
   await database.execute(
     "UPDATE notes SET created_at = updated_at WHERE created_at = ''",
   );
@@ -88,6 +96,8 @@ async function openDatabase(): Promise<Database> {
       id INTEGER PRIMARY KEY,
       title TEXT NOT NULL DEFAULT '',
       content TEXT NOT NULL DEFAULT '',
+      content_json TEXT,
+      document_version INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       deleted_at TEXT
@@ -118,6 +128,8 @@ function toNote(row: NoteRow): Note {
     id: row.id,
     title: row.title,
     content: row.content,
+    contentJson: row.content_json,
+    documentVersion: row.document_version,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     deletedAt: row.deleted_at,
@@ -145,7 +157,7 @@ async function selectNotesByIds(
 
   const placeholders = noteIds.map((_, index) => `$${index + 1}`).join(", ");
   const rows = await database.select<NoteRow[]>(
-    `SELECT id, title, content, created_at, updated_at, deleted_at
+    `SELECT id, title, content, content_json, document_version, created_at, updated_at, deleted_at
      FROM notes
      WHERE deleted_at IS NULL AND id IN (${placeholders})`,
     noteIds,
@@ -167,7 +179,7 @@ export async function loadWorkspace(): Promise<LoadedWorkspace> {
 
   if (!saved) {
     const rows = await database.select<NoteRow[]>(
-      `SELECT id, title, content, created_at, updated_at, deleted_at
+      `SELECT id, title, content, content_json, document_version, created_at, updated_at, deleted_at
        FROM notes
        WHERE deleted_at IS NULL
        ORDER BY updated_at DESC
@@ -208,7 +220,7 @@ export async function loadWorkspace(): Promise<LoadedWorkspace> {
 export async function loadHistory(): Promise<Note[]> {
   const database = await getDatabase();
   const rows = await database.select<NoteRow[]>(
-    `SELECT id, title, content, created_at, updated_at, deleted_at
+    `SELECT id, title, content, content_json, document_version, created_at, updated_at, deleted_at
      FROM notes
      WHERE deleted_at IS NULL
      ORDER BY updated_at DESC`,
@@ -219,7 +231,7 @@ export async function loadHistory(): Promise<Note[]> {
 export async function loadTrash(): Promise<Note[]> {
   const database = await getDatabase();
   const rows = await database.select<NoteRow[]>(
-    `SELECT id, title, content, created_at, updated_at, deleted_at
+    `SELECT id, title, content, content_json, document_version, created_at, updated_at, deleted_at
      FROM notes
      WHERE deleted_at IS NOT NULL
      ORDER BY deleted_at DESC`,
@@ -229,11 +241,16 @@ export async function loadTrash(): Promise<Note[]> {
 
 async function writeNote(database: Database, note: Note): Promise<void> {
   await database.execute(
-    `INSERT INTO notes (id, title, content, created_at, updated_at, deleted_at)
-     VALUES ($1, $2, $3, $4, $5, $6)
+    `INSERT INTO notes (
+       id, title, content, content_json, document_version,
+       created_at, updated_at, deleted_at
+     )
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      ON CONFLICT(id) DO UPDATE SET
        title = excluded.title,
        content = excluded.content,
+       content_json = excluded.content_json,
+       document_version = excluded.document_version,
        created_at = excluded.created_at,
        updated_at = excluded.updated_at,
        deleted_at = excluded.deleted_at`,
@@ -241,6 +258,8 @@ async function writeNote(database: Database, note: Note): Promise<void> {
       note.id,
       note.title,
       note.content,
+      note.contentJson,
+      note.documentVersion,
       note.createdAt,
       note.updatedAt,
       note.deletedAt,
@@ -275,7 +294,7 @@ export function saveWorkspaceSnapshot(
   return writeQueue.enqueue(async () => {
     const database = await getDatabase();
 
-    await runInTransaction(database, async () => {
+    await retryDatabaseBusy(async () => {
       for (const noteId of deletedNoteIds) {
         await database.execute("DELETE FROM notes WHERE id = $1", [noteId]);
       }
@@ -298,9 +317,10 @@ export function createRotatingBackup(force = false): Promise<string | null> {
   }
 
   backupPromise = (async () => {
-    await writeQueue.flush();
-    const database = await getDatabase();
-    await database.select("PRAGMA wal_checkpoint(FULL)");
+    await writeQueue.enqueue(async () => {
+      const database = await getDatabase();
+      await database.select("PRAGMA wal_checkpoint(FULL)");
+    });
     const path = await invoke<string | null>("create_rotating_backup");
     if (path) lastBackupAt = Date.now();
     return path;

@@ -1,7 +1,7 @@
 {
   "name": "instant-notes",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Application desktop locale de capture instantanée de notes.",
   "author": "Hugo Picot",
   "type": "module",
@@ -19,6 +19,11 @@
     "@fluentui/react-icons": "^2.0.344",
     "@tauri-apps/api": "^2.12.4",
     "@tauri-apps/plugin-sql": "^2.6.0",
+    "@tiptap/extension-placeholder": "^3.32.0",
+    "@tiptap/extension-task-item": "^3.32.0",
+    "@tiptap/extension-task-list": "^3.32.0",
+    "@tiptap/react": "^3.32.0",
+    "@tiptap/starter-kit": "^3.32.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },

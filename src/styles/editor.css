@@ -1,4 +1,4 @@
-.editor-pane {
+﻿.editor-pane {
   position: relative;
   min-width: 0;
   min-height: 0;
@@ -10,28 +10,177 @@
   user-select: text;
 }
 
-.editor-pane textarea {
+.editor-scroll {
   position: absolute;
   inset: 0;
-  width: 100%;
-  height: 100%;
-  resize: none;
-  padding: 15px 16px 30px;
-  border: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-color: #4a4a4a transparent;
+  scrollbar-width: thin;
+}
+
+.editor-scroll > div {
+  min-height: 100%;
+}
+
+.tiret-editor {
+  min-height: 100%;
+  padding: 19px 24px 48px;
   outline: 0;
-  background: transparent;
-  color: #e7e7e7;
+  color: #e5e5e5;
   caret-color: var(--accent);
   font-family: "Segoe UI Variable Text", "Segoe UI", sans-serif;
-  font-size: 14px;
-  line-height: 1.55;
+  font-size: 15px;
+  line-height: 1.62;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.tiret-editor > :first-child {
+  margin-top: 0;
+}
+
+.tiret-editor > :last-child {
+  margin-bottom: 0;
+}
+
+.tiret-editor p {
+  min-height: 1.62em;
+  margin: 0 0 3px;
+}
+
+.tiret-editor p.is-editor-empty:first-child::before {
+  height: 0;
+  float: left;
+  color: #666666;
+  content: attr(data-placeholder);
+  pointer-events: none;
+}
+
+.tiret-editor h1,
+.tiret-editor h2,
+.tiret-editor h3 {
+  color: #f1f1f1;
+  font-weight: 650;
+  line-height: 1.25;
+}
+
+.tiret-editor h1 {
+  margin: 24px 0 10px;
+  font-size: 28px;
+}
+
+.tiret-editor h2 {
+  margin: 20px 0 8px;
+  font-size: 22px;
+}
+
+.tiret-editor h3 {
+  margin: 16px 0 6px;
+  font-size: 18px;
+}
+
+.tiret-editor ul,
+.tiret-editor ol {
+  margin: 6px 0 10px;
+  padding-left: 25px;
+}
+
+.tiret-editor li {
+  margin: 2px 0;
+}
+
+.tiret-editor li p {
+  margin: 0;
+}
+
+.tiret-editor ul[data-type="taskList"] {
+  padding: 0;
+  list-style: none;
+}
+
+.tiret-editor ul[data-type="taskList"] li {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.tiret-editor ul[data-type="taskList"] li > label {
+  display: grid;
+  place-items: center;
+  padding-top: 5px;
+}
+
+.tiret-editor ul[data-type="taskList"] input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.tiret-editor ul[data-type="taskList"] li > div {
+  min-width: 0;
+  flex: 1;
+}
+
+.tiret-editor ul[data-type="taskList"] li[data-checked="true"] > div {
+  color: #7f7f7f;
+  text-decoration: line-through;
+}
+
+.tiret-editor blockquote {
+  margin: 12px 0;
+  padding-left: 15px;
+  border-left: 3px solid #666666;
+  color: #bdbdbd;
+}
+
+.tiret-editor code {
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: #2a2a2a;
+  color: #e8d978;
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 0.88em;
+}
+
+.tiret-editor pre {
+  overflow-x: auto;
+  margin: 12px 0;
+  padding: 14px 16px;
+  border: 1px solid #303030;
+  border-radius: 8px;
+  background: #141414;
+}
+
+.tiret-editor pre code {
+  padding: 0;
+  background: transparent;
+  color: #d7d7d7;
+  font-size: 13px;
+}
+
+.tiret-editor a {
+  color: #d8c94e;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.tiret-editor hr {
+  margin: 20px 0;
+  border: 0;
+  border-top: 1px solid #3b3b3b;
+}
+
+.tiret-editor ::selection {
+  background: #27527a;
 }
 
 .save-indicator {
   position: absolute;
+  z-index: 60;
   bottom: 8px;
   left: 17px;
-  z-index: 1;
   color: #777777;
   font-size: 10px;
   pointer-events: none;
@@ -63,4 +212,12 @@
 
 .new-note-button:hover {
   background: #383838;
+}
+
+
+@media (max-width: 520px) {
+  .tiret-editor {
+    padding-right: 17px;
+    padding-left: 17px;
+  }
 }
