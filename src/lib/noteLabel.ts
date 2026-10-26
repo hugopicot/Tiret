@@ -25,6 +25,18 @@ export function getNoteLabel(note: Note): string {
   return `Note sans titre · ${time}`;
 }
 
+export function getNoteTabLabel(note: Note): string {
+  const title = note.title.trim();
+  if (title) return title;
+
+  const firstLine = note.content
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find(Boolean);
+
+  return firstLine || "Sans titre";
+}
+
 export function formatNoteTime(value: string): string {
   return new Intl.DateTimeFormat("fr-FR", {
     day: "2-digit",

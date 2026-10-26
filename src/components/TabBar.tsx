@@ -1,4 +1,5 @@
 import { Add16Regular, Dismiss12Regular } from "@fluentui/react-icons";
+import { getNoteTabLabel } from "../lib/noteLabel";
 import type { Note } from "../types";
 
 interface TabBarProps {
@@ -23,6 +24,7 @@ export function TabBar({
       <div className="tab-list">
         {notes.map((note) => {
           const isActive = note.id === activeNoteId;
+          const tabLabel = getNoteTabLabel(note);
 
           return (
             <div
@@ -41,7 +43,7 @@ export function TabBar({
                 <input
                   className="tab__title"
                   value={note.title}
-                  placeholder="Untitled"
+                  placeholder={tabLabel}
                   aria-label="Titre de la note active"
                   onChange={(event) => onRename(event.target.value)}
                   onClick={() => onSelect(note.id)}
@@ -54,13 +56,13 @@ export function TabBar({
                   aria-selected="false"
                   onClick={() => onSelect(note.id)}
                 >
-                  {note.title.trim() || "Untitled"}
+                  {tabLabel}
                 </button>
               )}
               <button
                 className="tab__close"
                 type="button"
-                aria-label={`Fermer ${note.title.trim() || "Untitled"}`}
+                aria-label={`Fermer ${tabLabel}`}
                 onClick={() => onClose(note.id)}
               >
                 <Dismiss12Regular />

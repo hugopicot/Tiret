@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { Note } from "../types";
-import { formatRelativeNoteTime, getNoteLabel, isNoteInHistory } from "./noteLabel";
+import {
+  formatRelativeNoteTime,
+  getNoteLabel,
+  getNoteTabLabel,
+  isNoteInHistory,
+} from "./noteLabel";
 
 function note(changes: Partial<Note> = {}): Note {
   return {
@@ -29,6 +34,22 @@ describe("getNoteLabel", () => {
 
   it("gives a dated label to a completely blank note", () => {
     expect(getNoteLabel(note())).toMatch(/^Note sans titre · \d{2}:\d{2}$/);
+  });
+});
+
+describe("getNoteTabLabel", () => {
+  it("uses the page title in the tab", () => {
+    expect(getNoteTabLabel(note({ title: "Mathématiques" }))).toBe("Mathématiques");
+  });
+
+  it("falls back to the first written line", () => {
+    expect(getNoteTabLabel(note({ content: "Chapitre 4\nLes probabilités" }))).toBe(
+      "Chapitre 4",
+    );
+  });
+
+  it("uses Sans titre for a blank draft", () => {
+    expect(getNoteTabLabel(note())).toBe("Sans titre");
   });
 });
 
